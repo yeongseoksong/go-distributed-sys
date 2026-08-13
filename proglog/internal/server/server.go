@@ -7,14 +7,24 @@ import (
 	"google.golang.org/grpc"
 )
 
-func NewGRPCSever(config *Config) (*grpc.Server, error) {
-	gsrv := grpc.NewServer()
+type grpcServer struct {
+	api.UnimplementedLogServer
+	*Config
+}
+
+func NewGRPCSever(config *Config, opts ...grpc.ServerOption) (*grpc.Server, error) {
+	gsrv := grpc.NewServer(opts...)
 	srv, err := newgrpcServer(config)
 	if err != nil {
 		return nil, err
 	}
 	api.RegisterLogServer(gsrv, srv)
 	return gsrv, nil
+}
+
+func newgrpcServer(config *Config) (srv *grpcServer, err error) {
+	srv = &grpcServer{Config: config}
+	return srv, nil
 }
 
 type CommitLog interface {
@@ -27,16 +37,6 @@ type Config struct {
 }
 
 var _ api.LogServer = (*grpcServer)(nil)
-
-type grpcServer struct {
-	api.UnimplementedLogServer
-	*Config
-}
-
-func newgrpcServer(config *Config) (srv *grpcServer, err error) {
-	srv = &grpcServer{Config: config}
-	return srv, nil
-}
 
 func (s *grpcServer) Produce(ctx context.Context, req *api.ProduceRequest) (*api.ProduceResponse, error) {
 	offset, err := s.CommitLog.Append(req.Record)

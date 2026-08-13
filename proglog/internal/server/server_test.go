@@ -8,9 +8,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 	api "github.com/yeongseoksong/proglog/api/v1"
+	"github.com/yeongseoksong/proglog/internal/config"
 	"github.com/yeongseoksong/proglog/internal/log"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 )
 
@@ -46,21 +47,47 @@ func TestServer(t *testing.T) {
 func setupTest(t *testing.T, fn func(*Config)) (client api.LogClient, cfg *Config, teardown func()) {
 	t.Helper()
 
-	// 포트 0 = OS가 비어 있는 포트를 할당. 테스트 병렬 실행 시 포트 충돌을 피한다.
-	l, err := net.Listen("tcp", ":0")
+	l, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
+
+	clientTLsConfig, err := config.SetupTLSConfig(config.TLSConfig{
+		CAFile: config.CAFile,
+	})
+	require.NoError(t, err)
+
+	clientCreds := credentials.NewTLS(clientTLsConfig)
+	cc, err := grpc.NewClient(
+		l.Addr().String(),
+		grpc.WithTransportCredentials(clientCreds),
+	)
+	require.NoError(t, err)
+
+	client = api.NewLogClient(cc)
 
 	// 로컬 테스트라 TLS 없이 연결한다.
 	// grpc.WithInsecure()는 deprecated이므로 insecure 자격증명을 명시적으로 넘긴다.
-	clientOptions := []grpc.DialOption{
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	}
+	// clientOptions := []grpc.DialOption{
+	// 	grpc.WithTransportCredentials(insecure.NewCredentials()),
+	// }
 	// NewClient는 지연 연결(lazy)이라 여기서 블로킹되지 않는다.
 	// 실제 연결은 첫 RPC 호출 시점에 이루어지므로 서버 기동과의 경쟁 상태가 없다.
-	cc, err := grpc.NewClient(l.Addr().String(), clientOptions...)
-	require.NoError(t, err)
+	// cc, err := grpc.NewClient(l.Addr().String(), clientOptions...)
+	// require.NoError(t, err)
 
 	// 테스트마다 격리된 임시 디렉터리에 로그 세그먼트를 쓴다.
+
+	serverTLSConfig, err := config.SetupTLSConfig(config.TLSConfig{
+		CertFile:      config.ServerCertFile,
+		KeyFile:       config.ServerKeyFile,
+		CAFile:        config.CAFile,
+		ServerAddress: l.Addr().String(),
+	})
+
+	require.NoError(t, err)
+	serverCreds := credentials.NewTLS(serverTLSConfig)
+	////////here
+	////////////////////////////////########################
+
 	dir, err := os.MkdirTemp("", "server-test")
 	require.NoError(t, err)
 
@@ -73,18 +100,13 @@ func setupTest(t *testing.T, fn func(*Config)) (client api.LogClient, cfg *Confi
 		fn(cfg)
 	}
 
-	server, err := NewGRPCSever(cfg)
+	server, err := NewGRPCSever(cfg, grpc.Creds(serverCreds))
 	require.NoError(t, err)
 
-	// Serve는 블로킹 호출이므로 별도 고루틴에서 돌린다.
 	go func() {
 		server.Serve(l)
 	}()
 
-	client = api.NewLogClient(cc)
-
-	// 생성의 역순으로 정리한다. 리스너보다 서버를 먼저 멈춰야
-	// 처리 중인 커넥션이 정상 종료된다.
 	return client, cfg, func() {
 		server.Stop()
 		cc.Close()
