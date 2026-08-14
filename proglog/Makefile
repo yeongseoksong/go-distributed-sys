@@ -6,5 +6,6 @@ compile:
 		--go-grpc_opt=paths=source_relative \
 		--proto_path=.
 
-test:
+
+test:  
 	go test -race ./...
