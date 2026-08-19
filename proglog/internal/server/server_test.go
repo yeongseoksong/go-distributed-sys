@@ -2,20 +2,38 @@ package server
 
 import (
 	"context"
+	"flag"
 	"net"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	api "github.com/yeongseoksong/proglog/api/v1"
 	"github.com/yeongseoksong/proglog/internal/auth"
 	"github.com/yeongseoksong/proglog/internal/config"
 	"github.com/yeongseoksong/proglog/internal/log"
+	"go.opencensus.io/examples/exporter"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 )
+
+var debug = flag.Bool("debug", false, "enable observability for debugging.")
+
+func TestMain(m *testing.M) {
+	flag.Parse()
+	if *debug {
+		logger, err := zap.NewDevelopment()
+		if err != nil {
+			panic(err)
+		}
+		zap.ReplaceGlobals(logger)
+	}
+	os.Exit(m.Run())
+}
 
 // testScenario is a reusable signature for table-driven server tests.
 type testScenario func(t *testing.T, rootClient api.LogClient, nobodyClient api.LogClient, config *Config)
@@ -33,7 +51,6 @@ func TestServer(t *testing.T) {
 	} {
 		t.Run(senario, func(t *testing.T) {
 			rootClient, nobodyClient, config, teardown := setupTest(t, nil)
-			// 서브테스트가 끝나면 서버 종료 + 임시 디렉터리 삭제
 			defer teardown()
 			fn(t, rootClient, nobodyClient, config)
 		})
@@ -47,8 +64,28 @@ func TestServer(t *testing.T) {
 // fn은 서버를 띄우기 직전 Config를 수정할 수 있는 훅이다.
 // (이후 인증/ACL 챕터에서 테스트별로 다른 설정을 주입하는 데 쓰인다.)
 func setupTest(t *testing.T, fn func(*Config)) (rootClient api.LogClient, nobodyClient api.LogClient, cfg *Config, teardown func()) {
-
 	t.Helper()
+
+	var telemetryExporter *exporter.LogExporter
+	if *debug {
+		metricsLogFile, err := os.CreateTemp("", "metrics-*.log")
+		require.NoError(t, err)
+		t.Logf("metrics log file : %s", metricsLogFile.Name())
+
+		traceLogFile, err := os.CreateTemp("", "traces-*.log")
+		require.NoError(t, err)
+		t.Logf("traces log file : %s", traceLogFile.Name())
+
+		telemetryExporter, err = exporter.NewLogExporter(exporter.Options{
+			MetricsLogFile:    metricsLogFile.Name(),
+			TracesLogFile:     traceLogFile.Name(),
+			ReportingInterval: time.Second,
+		})
+
+		require.NoError(t, err)
+		err = telemetryExporter.Start()
+		require.NoError(t, err)
+	}
 
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -121,6 +158,11 @@ func setupTest(t *testing.T, fn func(*Config)) (rootClient api.LogClient, nobody
 		rootConn.Close()
 		nobodyConn.Close()
 		l.Close()
+		if telemetryExporter != nil {
+			time.Sleep(1500 * time.Millisecond)
+			telemetryExporter.Stop()
+			telemetryExporter.Close()
+		}
 		clog.Remove()
 		os.RemoveAll(dir)
 	}
