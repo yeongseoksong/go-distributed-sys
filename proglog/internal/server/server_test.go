@@ -107,7 +107,6 @@ func setupTest(t *testing.T, fn func(*Config)) (rootClient api.LogClient, nobody
 		require.NoError(t, err)
 		client := api.NewLogClient(conn)
 		return conn, client, opts
-
 	}
 
 	var rootConn *grpc.ClientConn
