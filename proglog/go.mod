@@ -18,7 +18,10 @@ require (
 	google.golang.org/protobuf v1.36.11
 )
 
-require github.com/hashicorp/go-msgpack v0.5.5 // indirect
+require (
+	github.com/hashicorp/go-msgpack v0.5.5 // indirect
+	github.com/soheilhy/cmux v0.1.5 // indirect
+)
 
 require (
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
